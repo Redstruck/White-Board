@@ -1,0 +1,629 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Toolbar from '../components/whiteboard/Toolbar';
+import TopBar from '../components/whiteboard/TopBar';
+import Canvas from '../components/whiteboard/Canvas';
+import Gallery from '../components/whiteboard/Gallery';
+import ExportDialog from '../components/whiteboard/ExportDialog';
+
+const STORAGE_KEY = 'vibe_whiteboards_v1';
+
+export default function WhiteboardPage() {
+  const [currentWhiteboard, setCurrentWhiteboard] = useState(null);
+  const [whiteboards, setWhiteboards] = useState([]);
+  const [selectedTool, setSelectedTool] = useState('pencil');
+  const [selectedObjectId, setSelectedObjectId] = useState(null);
+  const [pencilSettings, setPencilSettings] = useState({
+    color: '#000000',
+    width: 6,
+  });
+  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
+  const [showGallery, setShowGallery] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const saveTimeoutRef = useRef(null);
+
+  // Local storage helpers
+  const loadFromLocalStorage = () => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const data = JSON.parse(stored);
+        return data.boards || [];
+      }
+    } catch (error) {
+      console.error('Error loading from localStorage:', error);
+    }
+    return [];
+  };
+
+  const saveToLocalStorage = (boards) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        boards: boards,
+        lastUpdated: new Date().toISOString()
+      }));
+    } catch (error) {
+      console.error('Error saving to localStorage:', error);
+    }
+  };
+
+  const getObjectBoundingBox = useCallback((obj) => {
+    if (obj.type === 'stroke' && obj.points && obj.points.length > 0) {
+      let minX = obj.points[0].x;
+      let minY = obj.points[0].y;
+      let maxX = obj.points[0].x;
+      let maxY = obj.points[0].y;
+
+      obj.points.forEach(point => {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      });
+
+      const padding = (obj.style?.width || 2) / 2;
+      return {
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+      };
+    }
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }, []);
+
+  const initializeHistory = useCallback((board) => {
+    setHistory([{ objects: [...(board.objects || [])], action: 'initial' }]);
+    setHistoryIndex(0);
+  }, []);
+
+  const addToHistory = useCallback((objects, action) => {
+    setHistory(prev => {
+      const newHistoryEntry = { objects: [...objects], action };
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(newHistoryEntry);
+      
+      // Limit history size
+      if (newHistory.length > 50) {
+        newHistory.shift();
+        return newHistory;
+      }
+      
+      return newHistory;
+    });
+    setHistoryIndex(prev => prev + 1);
+  }, [historyIndex]);
+
+  const generateThumbnail = useCallback((board) => {
+    try {
+      // Create a small canvas to generate thumbnail
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = 320;
+      canvas.height = 180;
+      
+      // Draw background
+      context.fillStyle = board.background === 'black' ? '#000000' : '#FFFFFF';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Scale down objects and draw them
+      const scaleX = canvas.width / board.width;
+      const scaleY = canvas.height / board.height;
+      const scale = Math.min(scaleX, scaleY);
+      
+      board.objects.forEach(obj => {
+        if (obj.type === 'stroke' && obj.points && obj.points.length > 1) {
+          context.strokeStyle = obj.style.color || '#000000';
+          context.lineWidth = Math.max(1, (obj.style.width || 2) * scale);
+          context.globalAlpha = obj.style.alpha || 1;
+          
+          context.beginPath();
+          context.moveTo(obj.points[0].x * scale, obj.points[0].y * scale);
+          
+          for (let i = 1; i < obj.points.length; i++) {
+            context.lineTo(obj.points[i].x * scale, obj.points[i].y * scale);
+          }
+          
+          context.stroke();
+        }
+      });
+      
+      const thumbnail = canvas.toDataURL('image/png');
+      
+      // Update board with thumbnail
+      const updatedBoard = { ...board, thumbnail };
+      
+      setWhiteboards(prev => {
+        const updatedBoards = prev.map(b => 
+          b.id === board.id ? updatedBoard : b
+        );
+        saveToLocalStorage(updatedBoards);
+        return updatedBoards;
+      });
+      
+      setCurrentWhiteboard(current => 
+        current?.id === board.id ? updatedBoard : current
+      );
+    } catch (error) {
+      console.error('Error generating thumbnail:', error);
+    }
+  }, []);
+
+  const createNewWhiteboardData = useCallback(() => {
+    return {
+      id: 'board_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: `Whiteboard ${whiteboards.length + 1}`,
+      width: 1280,
+      height: 720,
+      background: 'white',
+      viewport: { x: 0, y: 0, zoom: 1 },
+      objects: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      thumbnail: null
+    };
+  }, [whiteboards.length]);
+
+  const createNewWhiteboard = useCallback(() => {
+    const newBoard = createNewWhiteboardData();
+    const newBoards = [newBoard, ...whiteboards];
+    
+    setCurrentWhiteboard(newBoard);
+    setWhiteboards(newBoards);
+    setViewport(newBoard.viewport);
+    initializeHistory(newBoard);
+    saveToLocalStorage(newBoards);
+    
+    // Generate thumbnail after a short delay
+    setTimeout(() => generateThumbnail(newBoard), 100);
+  }, [whiteboards, createNewWhiteboardData, initializeHistory, generateThumbnail]);
+
+  const loadWhiteboards = useCallback(() => {
+    try {
+      const boards = loadFromLocalStorage();
+      setWhiteboards(boards);
+      
+      // Load most recent whiteboard or create new one
+      if (boards.length > 0) {
+        const mostRecent = boards.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
+        setCurrentWhiteboard(mostRecent);
+        setViewport(mostRecent.viewport || { x: 0, y: 0, zoom: 1 });
+        initializeHistory(mostRecent);
+      } else {
+        createNewWhiteboard();
+      }
+    } catch (error) {
+      console.error('Error loading whiteboards:', error);
+      createNewWhiteboard();
+    }
+  }, [createNewWhiteboard, initializeHistory]);
+
+  const saveCurrentWhiteboard = useCallback(() => {
+    if (!currentWhiteboard) return;
+
+    const updatedBoard = {
+      ...currentWhiteboard,
+      viewport,
+      updatedAt: new Date().toISOString()
+    };
+    
+    const updatedBoards = whiteboards.map(board => 
+      board.id === updatedBoard.id ? updatedBoard : board
+    );
+    
+    setCurrentWhiteboard(updatedBoard);
+    setWhiteboards(updatedBoards);
+    saveToLocalStorage(updatedBoards);
+    
+    // Generate thumbnail
+    setTimeout(() => generateThumbnail(updatedBoard), 100);
+  }, [currentWhiteboard, viewport, whiteboards, generateThumbnail]);
+
+  const debouncedSave = useCallback(() => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(saveCurrentWhiteboard, 500);
+  }, [saveCurrentWhiteboard]);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      const previousState = history[newIndex];
+      setHistoryIndex(newIndex);
+      setCurrentWhiteboard(prev => ({ ...prev, objects: previousState.objects }));
+      setSelectedObjectId(null);
+      debouncedSave();
+    }
+  }, [historyIndex, history, debouncedSave]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      const nextState = history[newIndex];
+      setHistoryIndex(newIndex);
+      setCurrentWhiteboard(prev => ({ ...prev, objects: nextState.objects }));
+      setSelectedObjectId(null);
+      debouncedSave();
+    }
+  }, [historyIndex, history, debouncedSave]);
+
+  const deleteSelectedObject = useCallback(() => {
+    if (!selectedObjectId || !currentWhiteboard) return;
+    
+    const newObjects = currentWhiteboard.objects.filter(obj => obj.id !== selectedObjectId);
+    setCurrentWhiteboard(prev => ({ ...prev, objects: newObjects }));
+    addToHistory(newObjects, 'delete');
+    setSelectedObjectId(null);
+    debouncedSave();
+  }, [selectedObjectId, currentWhiteboard, addToHistory, debouncedSave]);
+
+  const duplicateSelectedObject = useCallback(() => {
+    if (!selectedObjectId || !currentWhiteboard) return;
+    
+    const selectedObj = currentWhiteboard.objects.find(obj => obj.id === selectedObjectId);
+    if (!selectedObj) return;
+    
+    const duplicatedObj = {
+      ...selectedObj,
+      id: selectedObj.type + '_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      transform: {
+        ...selectedObj.transform,
+        x: (selectedObj.transform?.x || 0) + 20,
+        y: (selectedObj.transform?.y || 0) + 20,
+      },
+    };
+    
+    const newObjects = [...currentWhiteboard.objects, duplicatedObj];
+    setCurrentWhiteboard(prev => ({ ...prev, objects: newObjects }));
+    addToHistory(newObjects, 'duplicate');
+    setSelectedObjectId(duplicatedObj.id);
+    debouncedSave();
+  }, [selectedObjectId, currentWhiteboard, addToHistory, debouncedSave]);
+
+  const nudgeSelectedObject = useCallback((direction, large = false) => {
+    if (!selectedObjectId || !currentWhiteboard) return;
+    
+    const nudgeAmount = large ? 10 : 1;
+    let deltaX = 0, deltaY = 0;
+    
+    switch (direction) {
+      case 'ArrowUp': deltaY = -nudgeAmount; break;
+      case 'ArrowDown': deltaY = nudgeAmount; break;
+      case 'ArrowLeft': deltaX = -nudgeAmount; break;
+      case 'ArrowRight': deltaX = nudgeAmount; break;
+    }
+    
+    const newObjects = currentWhiteboard.objects.map(obj => {
+      if (obj.id === selectedObjectId) {
+        return {
+          ...obj,
+          transform: {
+            ...obj.transform,
+            x: (obj.transform?.x || 0) + deltaX,
+            y: (obj.transform?.y || 0) + deltaY,
+          }
+        };
+      }
+      return obj;
+    });
+    
+    setCurrentWhiteboard(prev => ({ ...prev, objects: newObjects }));
+    addToHistory(newObjects, 'nudge');
+    debouncedSave();
+  }, [selectedObjectId, currentWhiteboard, addToHistory, debouncedSave]);
+
+  // Initialize app
+  useEffect(() => {
+    loadWhiteboards();
+    
+    // Add keyboard event listeners
+    const handleKeyDown = (e) => {
+      // Tool shortcuts
+      if (e.key >= '1' && e.key <= '6') {
+        e.preventDefault();
+        const tools = ['cursor', 'pencil', 'highlighter', 'eraser', 'text', 'shape'];
+        setSelectedTool(tools[parseInt(e.key) - 1]);
+      }
+      
+      // Undo/Redo
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          handleUndo();
+        } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
+          e.preventDefault();
+          handleRedo();
+        } else if (e.key === 's') {
+          e.preventDefault();
+          saveCurrentWhiteboard();
+        } else if (e.key === 'd') {
+          e.preventDefault();
+          duplicateSelectedObject();
+        }
+      }
+      
+      // Delete selected object
+      if (e.key === 'Delete' && selectedObjectId) {
+        e.preventDefault();
+        deleteSelectedObject();
+      }
+      
+      // Arrow keys for nudging
+      if (selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        e.preventDefault();
+        nudgeSelectedObject(e.key, e.shiftKey);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    loadWhiteboards,
+    handleUndo,
+    handleRedo,
+    saveCurrentWhiteboard,
+    duplicateSelectedObject,
+    deleteSelectedObject,
+    nudgeSelectedObject,
+    selectedObjectId
+  ]);
+
+  const handleObjectsChange = useCallback((newObjects) => {
+    if (!currentWhiteboard) return;
+    
+    setCurrentWhiteboard(prev => ({ ...prev, objects: newObjects }));
+    addToHistory(newObjects, 'modify');
+    debouncedSave();
+  }, [currentWhiteboard, addToHistory, debouncedSave]);
+
+  const handleAddObject = useCallback((newObject) => {
+    if (!currentWhiteboard) return;
+    
+    const newObjects = [...currentWhiteboard.objects, newObject];
+    setCurrentWhiteboard(prev => ({ ...prev, objects: newObjects }));
+    addToHistory(newObjects, 'add');
+    debouncedSave();
+  }, [currentWhiteboard, addToHistory, debouncedSave]);
+
+  const handleWhiteboardNameChange = useCallback(async (newName) => {
+    if (!currentWhiteboard) return;
+    
+    const updatedBoard = { 
+      ...currentWhiteboard, 
+      name: newName,
+      updatedAt: new Date().toISOString()
+    };
+    const updatedBoards = whiteboards.map(board => 
+      board.id === updatedBoard.id ? updatedBoard : board
+    );
+    
+    setCurrentWhiteboard(updatedBoard);
+    setWhiteboards(updatedBoards);
+    saveToLocalStorage(updatedBoards);
+  }, [currentWhiteboard, whiteboards]);
+
+  const handleSelectWhiteboard = useCallback((board) => {
+    setCurrentWhiteboard(board);
+    setViewport(board.viewport || { x: 0, y: 0, zoom: 1 });
+    setSelectedObjectId(null);
+    initializeHistory(board);
+  }, [initializeHistory]);
+
+  const handleDeleteWhiteboard = useCallback((boardId) => {
+    if (whiteboards.length === 1) return; // Don't delete the last whiteboard
+    
+    const newBoards = whiteboards.filter(board => board.id !== boardId);
+    setWhiteboards(newBoards);
+    saveToLocalStorage(newBoards);
+    
+    if (currentWhiteboard?.id === boardId) {
+      const nextBoard = newBoards[0];
+      setCurrentWhiteboard(nextBoard);
+      setViewport(nextBoard.viewport || { x: 0, y: 0, zoom: 1 });
+      initializeHistory(nextBoard);
+    }
+  }, [whiteboards, currentWhiteboard, initializeHistory]);
+
+  const handleDuplicateWhiteboard = useCallback((board) => {
+    const duplicatedBoard = {
+      ...board,
+      id: 'board_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: `${board.name} Copy`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      objects: board.objects.map(obj => ({ 
+        ...obj, 
+        id: obj.type + '_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+      })),
+    };
+    
+    const newBoards = [duplicatedBoard, ...whiteboards];
+    setWhiteboards(newBoards);
+    saveToLocalStorage(newBoards);
+    
+    // Generate thumbnail for the duplicated board
+    setTimeout(() => generateThumbnail(duplicatedBoard), 100);
+  }, [whiteboards, generateThumbnail]);
+
+  const handleRenameWhiteboard = useCallback((boardId, newName) => {
+    const updatedBoards = whiteboards.map(board => 
+      board.id === boardId 
+        ? { ...board, name: newName, updatedAt: new Date().toISOString() }
+        : board
+    );
+    
+    setWhiteboards(updatedBoards);
+    saveToLocalStorage(updatedBoards);
+    
+    if (currentWhiteboard?.id === boardId) {
+      setCurrentWhiteboard(prev => ({ ...prev, name: newName }));
+    }
+  }, [whiteboards, currentWhiteboard]);
+
+  const handleExport = useCallback(async ({ scale, includeBackground }) => {
+    if (!currentWhiteboard) return;
+    
+    setIsExporting(true);
+    
+    try {
+      // Create export canvas
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      
+      canvas.width = currentWhiteboard.width * scale;
+      canvas.height = currentWhiteboard.height * scale;
+      
+      // Draw background
+      if (includeBackground) {
+        if (currentWhiteboard.background === 'white') {
+          context.fillStyle = '#FFFFFF';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        } else if (currentWhiteboard.background === 'black') {
+          context.fillStyle = '#000000';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+        } else if (currentWhiteboard.background === 'grid') {
+          context.fillStyle = '#FFFFFF';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Draw grid
+          context.strokeStyle = '#E5E5E5';
+          context.lineWidth = scale;
+          const gridSize = 20 * scale;
+          
+          for (let x = 0; x <= canvas.width; x += gridSize) {
+            context.beginPath();
+            context.moveTo(x, 0);
+            context.lineTo(x, canvas.height);
+            context.stroke();
+          }
+          
+          for (let y = 0; y <= canvas.height; y += gridSize) {
+            context.beginPath();
+            context.moveTo(0, y);
+            context.lineTo(canvas.width, y);
+            context.stroke();
+          }
+        }
+      }
+      
+      // Draw objects
+      currentWhiteboard.objects.forEach(obj => {
+        if (obj.type === 'stroke' && obj.points && obj.points.length > 1) {
+          context.save();
+          
+          // Apply transform and scale
+          if (obj.transform) {
+            const bbox = getObjectBoundingBox(obj);
+            const centerX = (bbox.x + bbox.width / 2) * scale;
+            const centerY = (bbox.y + bbox.height / 2) * scale;
+            
+            context.translate(centerX + (obj.transform.x || 0) * scale, centerY + (obj.transform.y || 0) * scale);
+            context.scale(obj.transform.scaleX || 1, obj.transform.scaleY || 1);
+            context.rotate((obj.transform.rotation || 0) * Math.PI / 180);
+            context.translate(-centerX, -centerY);
+          }
+          
+          context.strokeStyle = obj.style.color || '#000000';
+          context.lineWidth = (obj.style.width || 2) * scale;
+          context.globalAlpha = obj.style.alpha || 1;
+          
+          context.beginPath();
+          context.moveTo(obj.points[0].x * scale, obj.points[0].y * scale);
+          
+          for (let i = 1; i < obj.points.length; i++) {
+            context.lineTo(obj.points[i].x * scale, obj.points[i].y * scale);
+          }
+          
+          context.stroke();
+          context.restore();
+        }
+      });
+      
+      // Download the image
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${currentWhiteboard.name}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        setIsExporting(false);
+        setShowExportDialog(false);
+      }, 'image/png');
+      
+    } catch (error) {
+      console.error('Error exporting whiteboard:', error);
+      setIsExporting(false);
+    }
+  }, [currentWhiteboard, getObjectBoundingBox]);
+
+  if (!currentWhiteboard) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div>Loading whiteboard...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 overflow-hidden">
+      <TopBar
+        whiteboardName={currentWhiteboard.name}
+        onWhiteboardNameChange={handleWhiteboardNameChange}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onOpenGallery={() => setShowGallery(true)}
+        onDownload={() => setShowExportDialog(true)}
+        canUndo={historyIndex > 0}
+        canRedo={historyIndex < history.length - 1}
+      />
+
+      <Toolbar
+        selectedTool={selectedTool}
+        onToolChange={setSelectedTool}
+        pencilSettings={pencilSettings}
+        onPencilSettingsChange={setPencilSettings}
+      />
+
+      <Canvas
+        objects={currentWhiteboard.objects}
+        selectedObjectId={selectedObjectId}
+        currentTool={selectedTool}
+        pencilSettings={pencilSettings}
+        onObjectsChange={handleObjectsChange}
+        onSelectedObjectChange={setSelectedObjectId}
+        onAddObject={handleAddObject}
+        viewport={viewport}
+        onViewportChange={setViewport}
+        background={currentWhiteboard.background}
+      />
+
+      <Gallery
+        isOpen={showGallery}
+        onClose={() => setShowGallery(false)}
+        whiteboards={whiteboards}
+        onCreateNew={createNewWhiteboard}
+        onSelectWhiteboard={handleSelectWhiteboard}
+        onDeleteWhiteboard={handleDeleteWhiteboard}
+        onDuplicateWhiteboard={handleDuplicateWhiteboard}
+        onRenameWhiteboard={handleRenameWhiteboard}
+      />
+
+      <ExportDialog
+        isOpen={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        onExport={handleExport}
+        isExporting={isExporting}
+      />
+    </div>
+  );
+}
