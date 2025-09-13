@@ -1,0 +1,144 @@
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+
+export default function Canvas({
+  objects,
+  selectedObjectId,
+  currentTool,
+  pencilSettings,
+  onObjectsChange,
+  onSelectedObjectChange,
+  onAddObject,
+  viewport,
+  onViewportChange,
+  background = 'white',
+}) {
+  const canvasRef = useRef(null);
+  const contextRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentPath, setCurrentPath] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState(null);
+
+  // Helper functions moved outside of useCallback dependencies
+  const drawBackground = useCallback((context, canvas) => {
+    const width = 1280;  // logical canvas size
+    const height = 720;
+    
+    if (background === 'white') {
+      context.fillStyle = '#FFFFFF';
+      context.fillRect(0, 0, width, height);
+    } else if (background === 'black') {
+      context.fillStyle = '#000000';
+      context.fillRect(0, 0, width, height);
+    } else if (background === 'grid') {
+      context.fillStyle = '#FFFFFF';
+      context.fillRect(0, 0, width, height);
+      
+      // Draw grid
+      context.strokeStyle = '#E5E5E5';
+      context.lineWidth = 1;
+      const gridSize = 20;
+      
+      for (let x = 0; x <= width; x += gridSize) {
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, height);
+        context.stroke();
+      }
+      
+      for (let y = 0; y <= height; y += gridSize) {
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(width, y);
+        context.stroke();
+      }
+    }
+  }, [background]);
+
+  const drawObject = useCallback((context, obj, isSelected = false) => {
+    if (obj.type === 'stroke') {
+      context.save();
+      
+      // Apply transform
+      if (obj.transform) {
+        const bbox = getObjectBoundingBox(obj);
+        const centerX = bbox.x + bbox.width / 2;
+        const centerY = bbox.y + bbox.height / 2;
+        
+        context.translate(centerX + obj.transform.x, centerY + obj.transform.y);
+        context.scale(obj.transform.scaleX || 1, obj.transform.scaleY || 1);
+        context.rotate((obj.transform.rotation || 0) * Math.PI / 180);
+        context.translate(-centerX, -centerY);
+      }
+
+      context.strokeStyle = obj.style.color || '#000000';
+      context.lineWidth = (obj.style.width || 2) * (obj.transform?.scaleX || 1);
+      context.globalAlpha = obj.style.alpha || 1;
+
+      if (obj.points && obj.points.length > 1) {
+        context.beginPath();
+        context.moveTo(obj.points[0].x, obj.points[0].y);
+        
+        for (let i = 1; i < obj.points.length; i++) {
+          context.lineTo(obj.points[i].x, obj.points[i].y);
+        }
+        
+        context.stroke();
+      }
+      
+      context.restore();
+    } else if (obj.type === 'text') {
+      context.save();
+      
+      if (obj.transform) {
+        context.translate(obj.transform.x || 0, obj.transform.y || 0);
+        context.scale(obj.transform.scaleX || 1, obj.transform.scaleY || 1);
+        context.rotate((obj.transform.rotation || 0) * Math.PI / 180);
+      }
+
+      context.fillStyle = obj.style.color || '#000000';
+      context.font = `${obj.style.fontSize || 16}px ${obj.style.fontFamily || 'Arial'}`;
+      context.fillText(obj.text || '', 0, 0);
+      
+      context.restore();
+    }
+  }, []);
+
+  const getObjectBoundingBox = (obj) => {
+    if (obj.type === 'stroke' && obj.points && obj.points.length > 0) {
+      let minX = obj.points[0].x;
+      let minY = obj.points[0].y;
+      let maxX = obj.points[0].x;
+      let maxY = obj.points[0].y;
+
+      obj.points.forEach(point => {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      });
+
+      const padding = (obj.style?.width || 2) / 2;
+      return {
+        x: minX - padding,
+        y: minY - padding,
+        width: maxX - minX + padding * 2,
+        height: maxY - minY + padding * 2,
+      };
+    }
+    
+    if (obj.type === 'text') {
+      const fontSize = obj.style?.fontSize || 16;
+      const textWidth = (obj.text || '').length * fontSize * 0.6; // rough estimation
+      return {
+        x: obj.transform?.x || 0,
+        y: (obj.transform?.y || 0) - fontSize,
+        width: textWidth,
+        height: fontSize,
+      };
+    }
+    
+    return { x: 0, y: 0, width: 0, height: 0 };
+  };
+
+ 
