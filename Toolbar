@@ -1,0 +1,151 @@
+import React from 'react';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
+import {
+  MousePointer2,
+  Pencil,
+  Highlighter,
+  Eraser,
+  Type,
+  Square,
+} from 'lucide-react';
+
+const tools = [
+  { id: 'cursor', name: 'Cursor', icon: MousePointer2, key: '1' },
+  { id: 'pencil', name: 'Pencil', icon: Pencil, key: '2' },
+  { id: 'highlighter', name: 'Highlighter', icon: Highlighter, key: '3' },
+  { id: 'eraser', name: 'Eraser', icon: Eraser, key: '4' },
+  { id: 'text', name: 'Text', icon: Type, key: '5' },
+  { id: 'shape', name: 'Shape', icon: Square, key: '6' },
+];
+
+export default function Toolbar({ selectedTool, onToolChange, pencilSettings, onPencilSettingsChange }) {
+  const colors = [
+    '#E24A4A', // red
+    '#F08A33', // orange
+    '#F7D153', // yellow
+    '#4CAF50', // green
+    '#3B82F6', // blue
+    '#7C4DFF', // purple
+    '#000000', // black
+    '#FFFFFF', // white
+  ];
+
+  const thicknesses = [
+    { size: 2, name: 'Thin' },
+    { size: 6, name: 'Medium' },
+    { size: 12, name: 'Thick' },
+  ];
+
+  return (
+    <TooltipProvider>
+      <div className="fixed left-4 top-1/2 transform -translate-y-1/2 bg-white rounded-lg shadow-lg border p-2 z-20">
+        <div className="flex flex-col space-y-2">
+          {tools.map((tool) => {
+            const IconComponent = tool.icon;
+            return (
+              <Tooltip key={tool.id}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={selectedTool === tool.id ? 'default' : 'ghost'}
+                    size="sm"
+                    className={`w-10 h-10 p-0 ${
+                      selectedTool === tool.id ? 'bg-blue-500 text-white' : ''
+                    }`}
+                    onClick={() => onToolChange(tool.id)}
+                  >
+                    <IconComponent className="h-5 w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <span>{tool.name} ({tool.key})</span>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+
+        {/* Color and thickness controls for drawing tools */}
+        {(selectedTool === 'pencil' || selectedTool === 'highlighter') && (
+          <div className="mt-4 pt-4 border-t">
+            {selectedTool === 'pencil' && (
+              <div className="space-y-3">
+                {/* Color picker */}
+                <div className="grid grid-cols-2 gap-1">
+                  {colors.map((color) => (
+                    <button
+                      key={color}
+                      className={`w-6 h-6 rounded border-2 ${
+                        pencilSettings.color === color
+                          ? 'border-gray-800 border-2'
+                          : 'border-gray-300'
+                      }`}
+                      style={{ backgroundColor: color }}
+                      onClick={() =>
+                        onPencilSettingsChange({ ...pencilSettings, color })
+                      }
+                    />
+                  ))}
+                </div>
+                
+                {/* Thickness picker */}
+                <div className="space-y-1">
+                  {thicknesses.map((thickness) => (
+                    <button
+                      key={thickness.size}
+                      className={`w-full h-6 flex items-center justify-center rounded ${
+                        pencilSettings.width === thickness.size
+                          ? 'bg-blue-100 border border-blue-500'
+                          : 'hover:bg-gray-100'
+                      }`}
+                      onClick={() =>
+                        onPencilSettingsChange({ ...pencilSettings, width: thickness.size })
+                      }
+                    >
+                      <div
+                        className="bg-gray-800 rounded"
+                        style={{
+                          width: '20px',
+                          height: thickness.size + 'px',
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedTool === 'highlighter' && (
+              <div className="space-y-3">
+                {/* Thickness picker for highlighter */}
+                <div className="space-y-1">
+                  {thicknesses.map((thickness) => (
+                    <button
+                      key={thickness.size}
+                      className={`w-full h-6 flex items-center justify-center rounded ${
+                        pencilSettings.width === thickness.size
+                          ? 'bg-yellow-100 border border-yellow-500'
+                          : 'hover:bg-gray-100'
+                      }`}
+                      onClick={() =>
+                        onPencilSettingsChange({ ...pencilSettings, width: thickness.size })
+                      }
+                    >
+                      <div
+                        className="bg-yellow-400 rounded opacity-50"
+                        style={{
+                          width: '20px',
+                          height: thickness.size + 'px',
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </TooltipProvider>
+  );
+}
