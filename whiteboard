@@ -1,0 +1,48 @@
+{
+  "name": "Whiteboard",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the whiteboard"
+    },
+    "width": {
+      "type": "number",
+      "default": 1280,
+      "description": "Canvas width"
+    },
+    "height": {
+      "type": "number",
+      "default": 720,
+      "description": "Canvas height"
+    },
+    "background": {
+      "type": "string",
+      "enum": [
+        "white",
+        "black",
+        "grid"
+      ],
+      "default": "white",
+      "description": "Background type"
+    },
+    "thumbnail": {
+      "type": "string",
+      "description": "Base64 encoded thumbnail image"
+    },
+    "viewport": {
+      "type": "object",
+      "description": "Viewport state as JSON string"
+    },
+    "objects": {
+      "type": "array",
+      "description": "Drawing objects serialized as JSON strings",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
