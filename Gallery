@@ -1,0 +1,160 @@
+import React, { useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { Plus, Trash2, Copy, Edit3 } from 'lucide-react';
+import { format } from 'date-fns';
+
+export default function Gallery({
+  isOpen,
+  onClose,
+  whiteboards,
+  onCreateNew,
+  onSelectWhiteboard,
+  onDeleteWhiteboard,
+  onDuplicateWhiteboard,
+  onRenameWhiteboard,
+}) {
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+
+  const handleRename = (id, name) => {
+    setEditingId(id);
+    setEditingName(name);
+  };
+
+  const handleRenameSubmit = () => {
+    onRenameWhiteboard(editingId, editingName);
+    setEditingId(null);
+    setEditingName('');
+  };
+
+  const handleRenameCancel = () => {
+    setEditingId(null);
+    setEditingName('');
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center justify-between">
+            <span>Whiteboard Gallery</span>
+            <Button onClick={onCreateNew} className="bg-blue-600 hover:bg-blue-700">
+              <Plus className="h-4 w-4 mr-2" />
+              New Whiteboard
+            </Button>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+          {whiteboards.map((board) => (
+            <Card key={board.id} className="cursor-pointer hover:shadow-lg transition-shadow">
+              <CardContent className="p-4">
+                {/* Thumbnail */}
+                <div
+                  className="w-full h-32 bg-gray-100 rounded mb-3 bg-cover bg-center flex items-center justify-center"
+                  style={{
+                    backgroundImage: board.thumbnail ? `url(${board.thumbnail})` : 'none'
+                  }}
+                  onClick={() => {
+                    onSelectWhiteboard(board);
+                    onClose();
+                  }}
+                >
+                  {!board.thumbnail && (
+                    <div className="text-gray-400 text-sm">No preview</div>
+                  )}
+                </div>
+
+                {/* Name */}
+                <div className="mb-2">
+                  {editingId === board.id ? (
+                    <Input
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onBlur={handleRenameSubmit}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleRenameSubmit();
+                        if (e.key === 'Escape') handleRenameCancel();
+                      }}
+                      className="h-6 text-sm"
+                      autoFocus
+                    />
+                  ) : (
+                    <h3
+                      className="font-semibold text-sm truncate cursor-pointer hover:text-blue-600"
+                      onClick={() => {
+                        onSelectWhiteboard(board);
+                        onClose();
+                      }}
+                    >
+                      {board.name}
+                    </h3>
+                  )}
+                </div>
+
+                {/* Metadata */}
+                <div className="text-xs text-gray-500 mb-3">
+                  <div>Created: {format(new Date(board.createdAt), 'MMM d, yyyy')}</div>
+                  <div>Updated: {format(new Date(board.updatedAt), 'MMM d, yyyy')}</div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-between items-center">
+                  <div className="flex space-x-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRename(board.id, board.name)}
+                      className="h-8 w-8 p-0"
+                    >
+                      <Edit3 className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onDuplicateWhiteboard(board)}
+                      className="h-8 w-8 p-0"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onDeleteWhiteboard(board.id)}
+                      className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      onSelectWhiteboard(board);
+                      onClose();
+                    }}
+                    className="h-8 px-3 text-xs"
+                  >
+                    Open
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+
+          {whiteboards.length === 0 && (
+            <div className="col-span-full text-center py-12">
+              <div className="text-gray-400 mb-4">No whiteboards yet</div>
+              <Button onClick={onCreateNew} className="bg-blue-600 hover:bg-blue-700">
+                <Plus className="h-4 w-4 mr-2" />
+                Create Your First Whiteboard
+              </Button>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
