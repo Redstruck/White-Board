@@ -141,4 +141,325 @@ export default function Canvas({
     return { x: 0, y: 0, width: 0, height: 0 };
   };
 
+  const drawSelectionHandles = useCallback((context, obj) => {
+    const bbox = getObjectBoundingBox(obj);
+    const transform = obj.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+    
+    context.save();
+    
+    // Transform to screen coordinates
+    context.translate(viewport.x, viewport.y);
+    context.scale(viewport.zoom, viewport.zoom);
+    
+    const centerX = bbox.x + bbox.width / 2;
+    const centerY = bbox.y + bbox.height / 2;
+    
+    context.translate(centerX + transform.x, centerY + transform.y);
+    context.scale(transform.scaleX, transform.scaleY);
+    context.rotate(transform.rotation * Math.PI / 180);
+    context.translate(-centerX, -centerY);
+
+    // Draw bounding box
+    context.strokeStyle = '#3B82F6';
+    context.lineWidth = 2 / viewport.zoom;
+    context.setLineDash([5, 5]);
+    context.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+    context.setLineDash([]);
+
+    // Draw corner handles
+    const handleSize = 8 / viewport.zoom;
+    const handles = [
+      { x: bbox.x, y: bbox.y, type: 'nw' },
+      { x: bbox.x + bbox.width, y: bbox.y, type: 'ne' },
+      { x: bbox.x + bbox.width, y: bbox.y + bbox.height, type: 'se' },
+      { x: bbox.x, y: bbox.y + bbox.height, type: 'sw' },
+    ];
+
+    context.fillStyle = '#FFFFFF';
+    context.strokeStyle = '#3B82F6';
+    handles.forEach(handle => {
+      context.fillRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
+      context.strokeRect(handle.x - handleSize/2, handle.y - handleSize/2, handleSize, handleSize);
+    });
+
+    // Draw rotation handle
+    const rotationHandle = {
+      x: centerX,
+      y: bbox.y - 30 / viewport.zoom,
+      type: 'rotate'
+    };
+    context.fillStyle = '#FFFFFF';
+    context.strokeStyle = '#3B82F6';
+    context.beginPath();
+    context.arc(rotationHandle.x, rotationHandle.y, handleSize/2, 0, 2 * Math.PI);
+    context.fill();
+    context.stroke();
+
+    context.restore();
+  }, [viewport]);
+
+  const redraw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const context = contextRef.current;
+    if (!canvas || !context) return;
+
+    // Clear canvas
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Apply viewport transform
+    context.save();
+    context.translate(viewport.x, viewport.y);
+    context.scale(viewport.zoom, viewport.zoom);
+
+    // Draw background
+    drawBackground(context, canvas);
+
+    // Draw objects
+    objects.forEach(obj => {
+      drawObject(context, obj, obj.id === selectedObjectId);
+    });
+
+    context.restore();
+
+    // Draw selection handles
+    if (selectedObjectId) {
+      const selectedObj = objects.find(obj => obj.id === selectedObjectId);
+      if (selectedObj) {
+        drawSelectionHandles(context, selectedObj);
+      }
+    }
+  }, [objects, selectedObjectId, viewport, drawBackground, drawObject, drawSelectionHandles]);
+
+  // Initialize canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight - 60; // Account for top bar
+
+    const context = canvas.getContext('2d');
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    contextRef.current = context;
+
+    redraw();
+  }, [redraw]);
+
+  // Redraw canvas when objects change
+  useEffect(() => {
+    redraw();
+  }, [redraw]);
+
+  const getCanvasPoint = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left - viewport.x) / viewport.zoom;
+    const y = (e.clientY - rect.top - viewport.y) / viewport.zoom;
+    return { x, y };
+  };
+
+  const hitTestObject = (point, obj) => {
+    if (obj.type === 'stroke' && obj.points) {
+      // Simple bounding box hit test for now
+      const bbox = getObjectBoundingBox(obj);
+      const transform = obj.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+      
+      // Apply transform to point for hit testing
+      let testX = point.x - transform.x;
+      let testY = point.y - transform.y;
+      
+      return testX >= bbox.x && testX <= bbox.x + bbox.width &&
+             testY >= bbox.y && testY <= bbox.y + bbox.height;
+    }
+    return false;
+  };
+
+  const findObjectAtPoint = (point) => {
+    // Search from top to bottom (reverse order)
+    for (let i = objects.length - 1; i >= 0; i--) {
+      if (hitTestObject(point, objects[i])) {
+        return objects[i];
+      }
+    }
+    return null;
+  };
+
+  const handleMouseDown = (e) => {
+    const point = getCanvasPoint(e);
+
+    if (currentTool === 'cursor') {
+      const hitObject = findObjectAtPoint(point);
+      if (hitObject) {
+        onSelectedObjectChange(hitObject.id);
+        setIsDragging(true);
+        setDragStart(point);
+      } else {
+        onSelectedObjectChange(null);
+        // Start panning
+        setIsDragging(true);
+        setDragStart(point);
+      }
+    } else if (currentTool === 'pencil' || currentTool === 'highlighter') {
+      setIsDrawing(true);
+      setCurrentPath([point]);
+    } else if (currentTool === 'eraser') {
+      const hitObject = findObjectAtPoint(point);
+      if (hitObject) {
+        const newObjects = objects.filter(obj => obj.id !== hitObject.id);
+        onObjectsChange(newObjects);
+        if (selectedObjectId === hitObject.id) {
+          onSelectedObjectChange(null);
+        }
+      }
+    } else if (currentTool === 'text') {
+      // Add text object
+      const newTextObj = {
+        id: 'text_' + Date.now(),
+        type: 'text',
+        tool: 'text',
+        text: 'Text',
+        style: {
+          fontSize: 16,
+          fontFamily: 'Arial',
+          color: '#000000',
+        },
+        transform: {
+          x: point.x,
+          y: point.y,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: 0,
+        },
+        z: objects.length,
+        createdAt: new Date().toISOString(),
+      };
+      onAddObject(newTextObj);
+      onSelectedObjectChange(newTextObj.id);
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    const point = getCanvasPoint(e);
+
+    if (isDrawing && (currentTool === 'pencil' || currentTool === 'highlighter')) {
+      setCurrentPath(prev => [...prev, point]);
+    } else if (isDragging && currentTool === 'cursor') {
+      if (selectedObjectId) {
+        // Move selected object
+        const deltaX = point.x - dragStart.x;
+        const deltaY = point.y - dragStart.y;
+        
+        const newObjects = objects.map(obj => {
+          if (obj.id === selectedObjectId) {
+            return {
+              ...obj,
+              transform: {
+                ...obj.transform,
+                x: (obj.transform?.x || 0) + deltaX,
+                y: (obj.transform?.y || 0) + deltaY,
+              }
+            };
+          }
+          return obj;
+        });
+        
+        onObjectsChange(newObjects);
+        setDragStart(point);
+      } else {
+        // Pan viewport
+        const deltaX = (point.x - dragStart.x) * viewport.zoom;
+        const deltaY = (point.y - dragStart.y) * viewport.zoom;
+        
+        onViewportChange({
+          ...viewport,
+          x: viewport.x + deltaX,
+          y: viewport.y + deltaY,
+        });
+        setDragStart(point);
+      }
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (isDrawing && currentPath.length > 1) {
+      const color = currentTool === 'highlighter' ? '#F7D153' : pencilSettings.color;
+      const alpha = currentTool === 'highlighter' ? 0.25 : 1;
+      
+      const newStrokeObj = {
+        id: 'stroke_' + Date.now(),
+        type: 'stroke',
+        tool: currentTool,
+        points: currentPath,
+        style: {
+          color,
+          width: pencilSettings.width,
+          alpha,
+        },
+        transform: {
+          x: 0,
+          y: 0,
+          scaleX: 1,
+          scaleY: 1,
+          rotation: 0,
+        },
+        z: objects.length,
+        createdAt: new Date().toISOString(),
+      };
+      
+      onAddObject(newStrokeObj);
+    }
+
+    setIsDrawing(false);
+    setCurrentPath([]);
+    setIsDragging(false);
+    setDragStart(null);
+  };
+
+  // Draw current path while drawing
+  useEffect(() => {
+    if (isDrawing && currentPath.length > 1) {
+      const canvas = canvasRef.current;
+      const context = contextRef.current;
+      if (!canvas || !context) return;
+
+      redraw();
+
+      // Draw current path
+      context.save();
+      context.translate(viewport.x, viewport.y);
+      context.scale(viewport.zoom, viewport.zoom);
+
+      const color = currentTool === 'highlighter' ? '#F7D153' : pencilSettings.color;
+      const alpha = currentTool === 'highlighter' ? 0.25 : 1;
+      
+      context.strokeStyle = color;
+      context.lineWidth = pencilSettings.width;
+      context.globalAlpha = alpha;
+      context.beginPath();
+      context.moveTo(currentPath[0].x, currentPath[0].y);
+      
+      for (let i = 1; i < currentPath.length; i++) {
+        context.lineTo(currentPath[i].x, currentPath[i].y);
+      }
+      
+      context.stroke();
+      context.restore();
+    }
+  }, [currentPath, isDrawing, currentTool, pencilSettings, viewport, redraw]);
+
+  return (
+    <div className="absolute inset-0 pt-16">
+      <canvas
+        ref={canvasRef}
+        className="cursor-crosshair"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      />
+    </div>
+  );
+}
+
  
